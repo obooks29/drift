@@ -1,0 +1,123 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("free")
+  apiKey    String   @unique @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  agents    Agent[]
+  members   OrganizationMember[]
+}
+
+model OrganizationMember {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String       @default("member")
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  @@unique([userId, organizationId])
+}
+
+model Agent {
+  id               String        @id @default(cuid())
+  name             String
+  description      String?
+  auth0ClientId    String        @unique
+  trustCertificate String
+  status           String        @default("active")
+  delegatedBy      String
+  organizationId   String
+  governedByApex   Boolean       @default(false)
+  ttlDays          Int?
+  metadata         Json?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  suspendedAt      DateTime?
+  suspendedReason  String?
+  organization     Organization  @relation(fields: [organizationId], references: [id])
+  scopeGrants      ScopeGrant[]
+  consentRecords   ConsentRecord[]
+  ledgerEntries    LedgerEntry[]
+}
+
+model ScopeGrant {
+  id              String   @id @default(cuid())
+  agentId         String
+  resource        String
+  action          String
+  constraints     Json?
+  tokenVaultKey   String
+  stepUpRequired  Boolean  @default(false)
+  expiresAt       DateTime?
+  createdAt       DateTime @default(now())
+  revokedAt       DateTime?
+  agent           Agent    @relation(fields: [agentId], references: [id])
+  @@unique([agentId, resource, action])
+}
+
+model DeniedScope {
+  id        String   @id @default(cuid())
+  agentId   String
+  resource  String
+  action    String
+  reason    String?
+  createdAt DateTime @default(now())
+  @@unique([agentId, resource, action])
+}
+
+model ConsentRecord {
+  id            String   @id @default(cuid())
+  agentId       String
+  action        String
+  approvedBy    String
+  metadata      Json?
+  cibaRequestId String?
+  signature     String
+  previousHash  String
+  timestamp     DateTime @default(now())
+  agent         Agent    @relation(fields: [agentId], references: [id])
+  @@index([agentId, timestamp])
+}
+
+model CIBARequest {
+  id             String   @id @default(cuid())
+  agentId        String
+  action         String
+  description    String
+  loginHint      String
+  metadata       Json?
+  status         String   @default("pending")
+  bindingMessage String
+  expiresAt      DateTime
+  resolvedAt     DateTime?
+  createdAt      DateTime @default(now())
+  @@index([agentId, status])
+}
+
+model LedgerEntry {
+  id             String   @id @default(cuid())
+  agentId        String
+  action         String
+  resource       String
+  result         String
+  metadata       Json?
+  tokenUsed      String?
+  scopeMatched   String?
+  cibaApprovalId String?
+  durationMs     Int?
+  timestamp      DateTime @default(now())
+  agent          Agent    @relation(fields: [agentId], references: [id])
+  @@index([agentId, timestamp])
+  @@index([agentId, action])
+  @@index([agentId, result])
+}
