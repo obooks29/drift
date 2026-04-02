@@ -1,7 +1,7 @@
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   transpilePackages: ["@drift-ai/sdk", "@drift-ai/db"],
+  experimental: {},
 };
 
-export default nextConfig;
+module.exports = nextConfig;
