@@ -2,7 +2,7 @@
 
 > **Auth0 "Authorized to Act" Hackathon 2026**
 
-Drift is the identity and authorization mesh for AI agents. Every agent gets a verified identity, scoped permissions, human approval gates, and a tamper-proof audit trail — all powered by Auth0.
+Drift is the identity and authorization mesh for AI agents. Every agent gets a verified identity, scoped permissions, human approval gates, and a tamper-proof audit trail, all powered by Auth0.
 
 ---
 
@@ -19,7 +19,7 @@ Drift answers that with four primitives:
 | **ConsentChain** | CIBA | Tamper-evident human approval records |
 | **ActionLedger** | Log Streams | Append-only audit trail, real-time |
 
-**Apex** — a Claude-powered meta-agent — governs all registered agents, detects anomalies, and can kill any agent instantly.
+**Apex** - a Claude-powered meta-agent, governs all registered agents, detects anomalies, and can kill any agent instantly.
 
 ---
 
