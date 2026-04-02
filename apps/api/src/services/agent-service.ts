@@ -7,7 +7,9 @@ import { getAuth0Client } from "../lib/auth0-management";
 import { issueTrustCertificate, rotateTrustCertificate, verifyTrustCertificate } from "../lib/trust-certificate";
 import { signConsentRecord, getChainTip } from "../lib/consent-chain-crypto";
 import { generateId } from "./helpers";
-import type { RegisterAgentOptions, RegisterAgentResult } from "@drift-ai/sdk";
+//import type { RegisterAgentOptions, RegisterAgentResult } from "@drift-ai/sdk";
+type RegisterAgentOptions = any;
+type RegisterAgentResult = any;
 
 export class AgentService {
 

@@ -5,7 +5,9 @@
 import prisma from "../lib/prisma";
 import { ledgerBroadcaster } from "../lib/websocket-ledger";
 import { generateId } from "./helpers";
-import type { ActionResult } from "@drift-ai/sdk";
+//import type { ActionResult } from "@drift-ai/sdk";
+// To this:
+type ActionResult = any;
 
 interface WriteEntry {
   agentId: string;

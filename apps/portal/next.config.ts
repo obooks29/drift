@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  transpilePackages: ["@drift-ai/sdk", "@drift-ai/db"],
+  // We are emptying this so Next.js doesn't try to build the broken local packages
+  transpilePackages: [], 
   experimental: {},
 };
 
