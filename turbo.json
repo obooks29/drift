@@ -2,9 +2,19 @@
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": [".env"],
   "tasks": {
-    "build": { "dependsOn": ["^build"], "outputs": [".next/**", "dist/**"] },
-    "dev":   { "dependsOn": ["^build"], "cache": false, "persistent": true },
-    "lint":  { "outputs": [] },
+    "build": { 
+      "dependsOn": ["^build"], 
+      "outputs": [".next/**", "dist/**"],
+      "env": [
+        "DATABASE_URL", "DIRECT_URL", "AUTH0_DOMAIN", "AUTH0_AUDIENCE", 
+        "AUTH0_SECRET", "AUTH0_M2M_CLIENT_ID", "AUTH0_M2M_CLIENT_SECRET", 
+        "ANTHROPIC_API_KEY", "GROQ_API_KEY", "AMADEUS_API_KEY", "LOG_LEVEL", 
+        "NODE_ENV", "DRIFT_INTERNAL_API_KEY", "DRIFT_ENCRYPTION_KEY", 
+        "DRIFT_API_URL", "DRIFT_WEBHOOK_SECRET"
+      ]
+    },
+    "dev": { "cache": false, "persistent": true },
+    "lint": { "outputs": [] },
     "typecheck": { "outputs": [] },
     "db:push": { "cache": false }
   }
