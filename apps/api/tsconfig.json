@@ -5,11 +5,10 @@
     "rootDir": "./src",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "composite": true,
-    "declaration": true,
-    "declarationMap": true,
+    "types": ["node"],
     "strict": false,
     "exactOptionalPropertyTypes": false,
+    "noImplicitAny": false,
     "skipLibCheck": true
   },
   "include": ["src/**/*"],
