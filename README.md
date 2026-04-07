@@ -1,6 +1,7 @@
 # Drift — Agent Identity & Authorization Platform
 
 > **Auth0 "Authorized to Act" Hackathon 2026**
+> **Demo Video** [https://youtu.be/dEWbvsHb_vw]
 
 Drift is the identity and authorization mesh for AI agents. Every agent gets a verified identity, scoped permissions, human approval gates, and a tamper-proof audit trail, all powered by Auth0.
 
