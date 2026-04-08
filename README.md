@@ -1,9 +1,7 @@
-# SECTION 1: README
----
 
 # Drift — Agent Identity & Authorization Platform
 
-> **Auth0 "Authorized to Act" Hackathon 2026** · Built by Toluwalope Ajayi
+> **Auth0 "Authorized to Act" Hackathon 2026** · Built by Bukola Jimoh
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-drift--demo--v2.vercel.app-6C47FF?style=flat)](https://drift-demo-v2.vercel.app)
 [![API](https://img.shields.io/badge/API-drift--demo--three.vercel.app-10B981?style=flat)](https://drift-demo-three.vercel.app/health)
