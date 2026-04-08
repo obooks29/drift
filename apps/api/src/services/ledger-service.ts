@@ -3,10 +3,10 @@
  * Full Prisma persistence + WebSocket broadcasting
  */
 import prisma from "../lib/prisma";
+import { Prisma } from "@prisma/client";
 import { ledgerBroadcaster } from "../lib/websocket-ledger";
 import { generateId } from "./helpers";
-//import type { ActionResult } from "@drift-ai/sdk";
-// To this:
+
 type ActionResult = any;
 
 interface WriteEntry {
@@ -22,6 +22,11 @@ interface WriteEntry {
   durationMs?: number;
 }
 
+function toJson(v: Record<string, unknown> | undefined | null): Prisma.InputJsonValue | typeof Prisma.DbNull {
+  if (v === undefined || v === null) return Prisma.DbNull;
+  return v as unknown as Prisma.InputJsonValue;
+}
+
 export class LedgerService {
 
   /** ── Write an entry ──────────────────────────────── */
@@ -34,7 +39,7 @@ export class LedgerService {
         action: entry.action,
         resource: entry.resource,
         result: entry.result,
-        metadata: entry.metadata as object,
+        metadata: toJson(entry.metadata),
         tokenUsed: entry.tokenUsed ? this.maskToken(entry.tokenUsed) : null,
         scopeMatched: entry.scopeMatched,
         cibaApprovalId: entry.cibaApprovalId,
@@ -42,7 +47,6 @@ export class LedgerService {
       },
     });
 
-    // Broadcast to WebSocket subscribers
     ledgerBroadcaster.broadcast(entry.organizationId, entry.agentId, {
       ...created,
       timestamp: created.timestamp.toISOString(),
@@ -62,12 +66,9 @@ export class LedgerService {
     page?: number;
     pageSize?: number;
   }) {
-    // Verify agent belongs to org
     const agentWhere = opts.agentId
       ? { agentId: opts.agentId }
-      : {
-          agent: { organizationId: opts.orgId }
-        };
+      : { agent: { organizationId: opts.orgId } };
 
     const page = opts.page ?? 1;
     const pageSize = opts.pageSize ?? 50;
@@ -104,31 +105,32 @@ export class LedgerService {
       select: { id: true },
     });
     const agentIds = agents.map((a) => a.id);
+    const from = since ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    const from = since ?? new Date(Date.now() - 24 * 60 * 60 * 1000); // last 24h
+    // Fetch raw results and aggregate in application code to avoid
+    // Prisma's self-referential `having` type which causes TS2615 with
+    // TypeScript ≥5.4 + Prisma 5.x groupBy.
+    const entries = await prisma.ledgerEntry.findMany({
+      where: { agentId: { in: agentIds }, timestamp: { gte: from } },
+      select: { result: true, action: true },
+    });
 
-    const [total, byResult, topActions] = await prisma.$transaction([
-      prisma.ledgerEntry.count({ where: { agentId: { in: agentIds }, timestamp: { gte: from } } }),
-      prisma.ledgerEntry.groupBy({
-        by: ["result"],
-        where: { agentId: { in: agentIds }, timestamp: { gte: from } },
-        _count: { result: true },
-      }),
-      prisma.ledgerEntry.groupBy({
-        by: ["action"],
-        where: { agentId: { in: agentIds }, timestamp: { gte: from } },
-        _count: { action: true },
-        orderBy: { _count: { action: "desc" } },
-        take: 5,
-      }),
-    ]);
+    const total = entries.length;
 
-    return {
-      total,
-      byResult: Object.fromEntries(byResult.map((r) => [r.result, r._count.result])),
-      topActions: topActions.map((a) => ({ action: a.action, count: a._count.action })),
-      since: from,
-    };
+    const byResult: Record<string, number> = {};
+    const actionCounts: Record<string, number> = {};
+
+    for (const e of entries) {
+      byResult[e.result] = (byResult[e.result] ?? 0) + 1;
+      actionCounts[e.action] = (actionCounts[e.action] ?? 0) + 1;
+    }
+
+    const topActions = Object.entries(actionCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([action, count]) => ({ action, count }));
+
+    return { total, byResult, topActions, since: from };
   }
 
   /** ── Export CSV ──────────────────────────────────── */
@@ -153,7 +155,6 @@ export class LedgerService {
       orderBy: { timestamp: "asc" },
     });
 
-    // Group by hour
     const buckets = new Map<string, number>();
     for (let h = 0; h < hours; h++) {
       const t = new Date(from.getTime() + h * 60 * 60 * 1000);

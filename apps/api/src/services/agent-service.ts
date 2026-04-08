@@ -3,13 +3,21 @@
  * Full Auth0 M2M provisioning + Prisma persistence + Trust Certificates
  */
 import prisma from "../lib/prisma";
+import { Prisma } from "@prisma/client";
 import { getAuth0Client } from "../lib/auth0-management";
 import { issueTrustCertificate, rotateTrustCertificate, verifyTrustCertificate } from "../lib/trust-certificate";
 import { signConsentRecord, getChainTip } from "../lib/consent-chain-crypto";
 import { generateId } from "./helpers";
-//import type { RegisterAgentOptions, RegisterAgentResult } from "@drift-ai/sdk";
 type RegisterAgentOptions = any;
 type RegisterAgentResult = any;
+
+/**
+ * Safely coerce Record<string,unknown> to Prisma's JSON input type.
+ */
+function toJson(v: Record<string, unknown> | undefined | null): Prisma.InputJsonValue | typeof Prisma.DbNull {
+  if (v === undefined || v === null) return Prisma.DbNull;
+  return v as unknown as Prisma.InputJsonValue;
+}
 
 export class AgentService {
 
@@ -18,22 +26,15 @@ export class AgentService {
     const auth0 = getAuth0Client();
     const agentId = generateId("drift_agt");
 
-    // 1. Provision Auth0 M2M application
     const { clientId: auth0ClientId, clientSecret } = await auth0.createM2MApp({
       agentId,
       name: opts.name,
       description: opts.description,
     });
 
-    // 2. Grant M2M app access to Drift API audience
     const scopeStrings = opts.scopes.map((s) => `${s.resource}:${s.action}`);
-    await auth0.grantM2MAccess(
-      auth0ClientId,
-      process.env.AUTH0_AUDIENCE!,
-      scopeStrings
-    );
+    await auth0.grantM2MAccess(auth0ClientId, process.env.AUTH0_AUDIENCE!, scopeStrings);
 
-    // 3. Issue trust certificate
     const cert = await issueTrustCertificate({
       agentId,
       agentName: opts.name,
@@ -44,10 +45,8 @@ export class AgentService {
       version: 1,
     });
 
-    // 4. Persist to DB (transaction)
     const stepUpScopes = new Set(opts.stepUp ?? []);
     const agent = await prisma.$transaction(async (tx) => {
-      // Create agent
       const created = await tx.agent.create({
         data: {
           id: agentId,
@@ -60,38 +59,39 @@ export class AgentService {
           organizationId: opts.organizationId,
           governedByApex: opts.governedBy === "apex",
           ttlDays: opts.ttlDays,
-          metadata: opts.metadata as object,
+          metadata: toJson(opts.metadata),
         },
       });
 
-      // Create scope grants
       for (const scope of opts.scopes) {
         const scopeKey = `${scope.resource}:${scope.action}`;
-        // In real deployment: store Token Vault key here
         const tokenVaultKey = `vault:pending:${auth0ClientId}:${scopeKey}`;
         await tx.scopeGrant.create({
           data: {
             agentId,
             resource: scope.resource,
             action: scope.action,
-            constraints: scope.constraints as object,
+            constraints: toJson(scope.constraints),
             tokenVaultKey,
             stepUpRequired: stepUpScopes.has(scopeKey) || stepUpScopes.has(`${scope.resource}:*`),
           },
         });
       }
 
-      // Write genesis consent record
-      const chainTip = "genesis";
       const consentId = generateId("con");
+      const consentMeta: Record<string, unknown> = {
+        scopes: scopeStrings,
+        auth0ClientId,
+        certFingerprint: cert.fingerprint,
+      };
       const record = signConsentRecord({
         id: consentId,
         agentId,
         action: "register_agent",
         approvedBy: opts.delegatedBy,
-        metadata: { scopes: scopeStrings, auth0ClientId, certFingerprint: cert.fingerprint },
+        metadata: consentMeta,
         timestamp: new Date().toISOString(),
-        previousHash: chainTip,
+        previousHash: "genesis",
       });
       await tx.consentRecord.create({
         data: {
@@ -99,7 +99,7 @@ export class AgentService {
           agentId,
           action: "register_agent",
           approvedBy: opts.delegatedBy,
-          metadata: record.metadata,
+          metadata: toJson(record.metadata),
           signature: record.signature,
           previousHash: record.previousHash,
         },
@@ -108,7 +108,6 @@ export class AgentService {
       return created;
     });
 
-    // 5. Build ScopeGraph response
     const grants = await prisma.scopeGrant.findMany({ where: { agentId, revokedAt: null } });
 
     return {
@@ -177,7 +176,6 @@ export class AgentService {
     const agent = await this.get(agentId, orgId);
     const auth0 = getAuth0Client();
 
-    // Block M2M app in Auth0
     await auth0.updateM2MApp(agent.auth0ClientId, {
       "client_metadata": { drift_suspended: "true", drift_suspend_reason: reason },
     });
@@ -188,7 +186,6 @@ export class AgentService {
         data: { status: "suspended", suspendedAt: new Date(), suspendedReason: reason },
       });
 
-      // Consent chain entry
       const chain = await tx.consentRecord.findMany({ where: { agentId }, orderBy: { timestamp: "asc" } });
       const tip = chain.length ? chain[chain.length - 1]!.signature.replace("sha256:", "") : "genesis";
       const consentId = generateId("con");
@@ -198,7 +195,11 @@ export class AgentService {
         timestamp: new Date().toISOString(), previousHash: tip,
       });
       await tx.consentRecord.create({
-        data: { id: consentId, agentId, action: "suspend_agent", approvedBy: "system", metadata: { reason }, signature: record.signature, previousHash: record.previousHash },
+        data: {
+          id: consentId, agentId, action: "suspend_agent", approvedBy: "system",
+          metadata: toJson({ reason }),
+          signature: record.signature, previousHash: record.previousHash,
+        },
       });
       return u;
     });
@@ -226,13 +227,8 @@ export class AgentService {
     const agent = await this.get(agentId, orgId);
     const auth0 = getAuth0Client();
 
-    // Delete the M2M app in Auth0 — this immediately invalidates all tokens
     await auth0.deleteM2MApp(agent.auth0ClientId);
-
-    await prisma.agent.update({
-      where: { id: agentId },
-      data: { status: "revoked" },
-    });
+    await prisma.agent.update({ where: { id: agentId }, data: { status: "revoked" } });
 
     return { success: true, agentId, reason };
   }
@@ -256,17 +252,14 @@ export class AgentService {
 
   /** ── Check Scope ──────────────────────────────────────── */
   async checkScope(agentId: string, action: string, resource: string) {
-    // Check deny list first
     const denied = await prisma.deniedScope.findFirst({ where: { agentId, resource, action } });
     if (denied) return { allowed: false, requiresStepUp: false, grant: null, reason: "explicitly_denied" };
 
-    // Check grants
     const grant = await prisma.scopeGrant.findFirst({
       where: { agentId, resource, action, revokedAt: null },
     });
     if (!grant) return { allowed: false, requiresStepUp: false, grant: null, reason: "no_grant" };
 
-    // Check expiry
     if (grant.expiresAt && grant.expiresAt < new Date()) {
       return { allowed: false, requiresStepUp: false, grant: null, reason: "grant_expired" };
     }
@@ -292,20 +285,13 @@ export class AgentService {
     const agent = await this.get(agentId, orgId);
     const auth0 = getAuth0Client();
 
-    // Get a fresh token from Auth0 for this agent
-    // In production, the client secret would be stored in a secrets manager
     const agentSecret = process.env[`AGENT_SECRET_${agentId.replace(/-/g, "_").toUpperCase()}`]
       ?? process.env.DRIFT_DEFAULT_AGENT_SECRET!;
 
     try {
-      const token = await auth0.getAgentToken(
-        agent.auth0ClientId,
-        agentSecret,
-        process.env.AUTH0_AUDIENCE!
-      );
+      const token = await auth0.getAgentToken(agent.auth0ClientId, agentSecret, process.env.AUTH0_AUDIENCE!);
       return { accessToken: token.accessToken, expiresIn: token.expiresIn, scope: `${resource}:${action}`, requiresStepUp: false };
     } catch {
-      // Fallback for development — return a placeholder token
       return {
         accessToken: `dev_token_${agentId}_${resource}_${action}_${Date.now()}`,
         expiresIn: 3600,

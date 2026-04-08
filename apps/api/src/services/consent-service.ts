@@ -3,10 +3,22 @@
  * Full CIBA flow + Prisma ConsentChain persistence
  */
 import prisma from "../lib/prisma";
+import { Prisma } from "@prisma/client";
 import { getAuth0Client } from "../lib/auth0-management";
 import { signConsentRecord, verifyChain, getChainTip } from "../lib/consent-chain-crypto";
 import { generateId } from "./helpers";
 import { randomBytes } from "crypto";
+
+/**
+ * Safely coerce Record<string,unknown> to Prisma's JSON input type.
+ * Prisma rejects `Record<string,unknown>` directly because `unknown` is
+ * wider than `InputJsonValue`. Routing through `unknown` first is safe
+ * here because we own the shape at every call site.
+ */
+function toJson(v: Record<string, unknown> | undefined | null): Prisma.InputJsonValue | typeof Prisma.DbNull {
+  if (v === undefined || v === null) return Prisma.DbNull;
+  return v as unknown as Prisma.InputJsonValue;
+}
 
 export class ConsentService {
 
@@ -15,13 +27,12 @@ export class ConsentService {
     agentId: string;
     action: string;
     description: string;
-    loginHint: string;           // User email
+    loginHint: string;
     metadata?: Record<string, unknown>;
   }) {
     const auth0 = getAuth0Client();
     const bindingMessage = `DRIFT-${randomBytes(2).toString("hex").toUpperCase()}`;
 
-    // Call Auth0 CIBA endpoint
     let authReqId: string;
     let expiresIn: number;
     let interval: number;
@@ -37,13 +48,11 @@ export class ConsentService {
       expiresIn = ciba.expiresIn;
       interval = ciba.interval;
     } catch {
-      // Fallback: generate a local CIBA request ID for dev/testing
       authReqId = `ciba_dev_${generateId()}`;
       expiresIn = 300;
       interval = 5;
     }
 
-    // Persist to DB
     const id = generateId("ciba");
     const record = await prisma.cIBARequest.create({
       data: {
@@ -52,11 +61,10 @@ export class ConsentService {
         action: opts.action,
         description: opts.description,
         loginHint: opts.loginHint,
-        metadata: opts.metadata as object,
+        metadata: toJson(opts.metadata),
         status: "pending",
         bindingMessage,
         expiresAt: new Date(Date.now() + expiresIn * 1000),
-        // Store Auth0 auth_req_id in metadata for polling
       },
     });
 
@@ -69,7 +77,7 @@ export class ConsentService {
       status: "pending" as const,
       bindingMessage,
       expiresAt: record.expiresAt,
-      authReqId,             // Return to caller for polling
+      authReqId,
       interval,
     };
   }
@@ -79,7 +87,6 @@ export class ConsentService {
     const record = await prisma.cIBARequest.findUnique({ where: { id: requestId } });
     if (!record) throw Object.assign(new Error("CIBA request not found"), { statusCode: 404 });
 
-    // Check if expired
     if (record.expiresAt < new Date() && record.status === "pending") {
       await prisma.cIBARequest.update({ where: { id: requestId }, data: { status: "expired", resolvedAt: new Date() } });
       return { ...record, status: "expired" as const };
@@ -94,13 +101,11 @@ export class ConsentService {
     if (request.status !== "pending") throw Object.assign(new Error(`Request already ${request.status}`), { statusCode: 409 });
 
     const updated = await prisma.$transaction(async (tx) => {
-      // Update CIBA request status
       const u = await tx.cIBARequest.update({
         where: { id: requestId },
         data: { status: decision, resolvedAt: new Date() },
       });
 
-      // If approved, write to consent chain
       if (decision === "approved") {
         const chain = await tx.consentRecord.findMany({
           where: { agentId: request.agentId },
@@ -114,17 +119,18 @@ export class ConsentService {
         })));
 
         const consentId = generateId("con");
-        const record = signConsentRecord({
+        const consentMeta: Record<string, unknown> = {
+          cibaRequestId: requestId,
+          originalAction: request.action,
+          description: request.description,
+          ...(request.metadata as Record<string, unknown> ?? {}),
+        };
+        const signed = signConsentRecord({
           id: consentId,
           agentId: request.agentId,
           action: "approve_action",
           approvedBy: resolvedBy,
-          metadata: {
-            cibaRequestId: requestId,
-            originalAction: request.action,
-            description: request.description,
-            ...(request.metadata as Record<string, unknown> ?? {}),
-          },
+          metadata: consentMeta,
           timestamp: new Date().toISOString(),
           cibaRequestId: requestId,
           previousHash: tip,
@@ -136,10 +142,10 @@ export class ConsentService {
             agentId: request.agentId,
             action: "approve_action",
             approvedBy: resolvedBy,
-            metadata: record.metadata,
+            metadata: toJson(signed.metadata),
             cibaRequestId: requestId,
-            signature: record.signature,
-            previousHash: record.previousHash,
+            signature: signed.signature,
+            previousHash: signed.previousHash,
           },
         });
       }
@@ -162,17 +168,13 @@ export class ConsentService {
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, pollInterval));
 
-      // Poll Auth0 first (real CIBA)
       try {
         const result = await auth0.pollCIBA(authReqId);
         if (result.status !== "pending") {
-          // Sync back to DB
           await prisma.cIBARequest.update({
             where: { id: requestId },
             data: { status: result.status, resolvedAt: new Date() },
           });
-          // auth0.pollCIBA types status as a broad union that includes "pending".
-          // The guard above has already excluded it; cast to the terminal union.
           return {
             status: result.status as "approved" | "rejected" | "expired",
             accessToken: result.accessToken,
@@ -182,16 +184,11 @@ export class ConsentService {
         // Fall through to DB poll (dev mode)
       }
 
-      // Check DB (for manual resolution via portal)
       const dbRecord = await this.pollCIBA(requestId);
-
-      // pollCIBA returns a Prisma record whose `status` is typed broadly.
-      // The guard below excludes "pending"; cast to the terminal union.
       if (dbRecord.status !== "pending") {
         return { status: dbRecord.status as "approved" | "rejected" | "expired" };
       }
 
-      // Back-off: increase interval slightly (max 10s)
       pollInterval = Math.min(pollInterval * 1.1, 10_000);
     }
 
@@ -224,15 +221,12 @@ export class ConsentService {
 
   /** ── Pending CIBA requests ───────────────────────── */
   async getPending(orgId: string) {
-    // Get all agents for this org
     const agents = await prisma.agent.findMany({ where: { organizationId: orgId }, select: { id: true } });
     const agentIds = agents.map((a) => a.id);
 
-    const requests = await prisma.cIBARequest.findMany({
+    return prisma.cIBARequest.findMany({
       where: { agentId: { in: agentIds }, status: "pending", expiresAt: { gt: new Date() } },
       orderBy: { createdAt: "desc" },
     });
-
-    return requests;
   }
 }
