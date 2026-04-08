@@ -179,8 +179,12 @@ export class ConsentService {
 
       // Check DB (for manual resolution via portal)
       const dbRecord = await this.pollCIBA(requestId);
+
+      // Narrow: we already know it passed the "pending" gate above,
+      // so only return when it has settled into a terminal state.
       if (dbRecord.status !== "pending") {
-        return { status: dbRecord.status as "approved" | "rejected" | "expired" };
+        const terminalStatus = dbRecord.status as "approved" | "rejected" | "expired";
+        return { status: terminalStatus };
       }
 
       // Back-off: increase interval slightly (max 10s)

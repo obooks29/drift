@@ -43,10 +43,12 @@ export function signConsentRecord(
 
 /** Verify a single record's signature */
 export function verifyRecord(record: ConsentChainEntry): boolean {
-  const expected = `sha256:${hashRecord({ ...record, signature: "" })}`;
-  return record.signature === expected ||
-    // Allow slight variation (signature field exclusion from hash)
-    `sha256:${hashRecord({ ...record })}` === record.signature;
+  // Destructure out `signature` so the rest matches Omit<ConsentChainEntry, "signature">
+  // This is the correct fix: passing `{ ...record }` to hashRecord previously included
+  // the `signature` field, which TypeScript rightly rejected as a type error.
+  const { signature, ...recordWithoutSignature } = record;
+  const expected = `sha256:${hashRecord(recordWithoutSignature)}`;
+  return signature === expected;
 }
 
 /** Verify the entire chain — each record's previousHash must match the previous signature */

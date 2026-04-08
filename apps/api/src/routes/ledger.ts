@@ -28,7 +28,11 @@ export const ledgerRouter: FastifyPluginAsync = async (app) => {
   app.post("/", async (req, reply) => {
     const orgId = (req as typeof req & { orgId: string }).orgId;
     const entry = req.body as Record<string, unknown>;
-    const created = await svc.write({ ...(entry as Parameters<typeof svc.write>[0]), organizationId: orgId });
+    // Cast through unknown — body shape is validated at runtime by svc.write
+    const created = await svc.write({
+      ...(entry as unknown as Parameters<typeof svc.write>[0]),
+      organizationId: orgId,
+    });
     return reply.code(201).send(created);
   });
 

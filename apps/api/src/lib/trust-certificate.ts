@@ -2,6 +2,14 @@
  * Trust Certificate Service
  * Issues and verifies JWT trust certificates for Drift agents.
  * These are signed tokens agents present to prove their identity.
+ *
+ * Why the explicit `as string` casts below:
+ *   `TrustCertPayload extends JWTPayload` inherits an index signature
+ *   `[propName: string]: unknown` from jose's JWTPayload.  When the type
+ *   is used through `Omit<...>` TypeScript resolves all property lookups
+ *   through that index signature, widening them to `unknown` even though
+ *   they are explicitly declared as `string` on TrustCertPayload.
+ *   The casts are safe: the shape is guaranteed by the interface definition.
  */
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import { createHmac, randomBytes } from "crypto";
@@ -31,10 +39,18 @@ function signingKey(orgId: string): Uint8Array {
 }
 
 /** Issue a trust certificate for an agent */
-export async function issueTrustCertificate(payload: Omit<TrustCertPayload, "iss" | "iat" | "exp">): Promise<TrustCertificate> {
+export async function issueTrustCertificate(
+  payload: Omit<TrustCertPayload, "iss" | "iat" | "exp">
+): Promise<TrustCertificate> {
   const now = new Date();
   const exp = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days
-  const key = signingKey(payload.organizationId);
+
+  // Explicit casts needed: Omit<TrustCertPayload, …> surfaces the JWTPayload
+  // index signature which widens all fields to `unknown`.
+  const organizationId = payload.organizationId as string;
+  const agentId = payload.agentId as string;
+
+  const key = signingKey(organizationId);
 
   const token = await new SignJWT({ ...payload } as unknown as JWTPayload)
     .setProtectedHeader({ alg: "HS256", typ: "drift+jwt" })
@@ -45,7 +61,7 @@ export async function issueTrustCertificate(payload: Omit<TrustCertPayload, "iss
     .sign(key);
 
   const fingerprint = createHmac("sha256", token)
-    .update(payload.agentId)
+    .update(agentId)
     .digest("hex")
     .slice(0, 16);
 
