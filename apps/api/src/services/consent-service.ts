@@ -171,7 +171,12 @@ export class ConsentService {
             where: { id: requestId },
             data: { status: result.status, resolvedAt: new Date() },
           });
-          return result;
+          // auth0.pollCIBA types status as a broad union that includes "pending".
+          // The guard above has already excluded it; cast to the terminal union.
+          return {
+            status: result.status as "approved" | "rejected" | "expired",
+            accessToken: result.accessToken,
+          };
         }
       } catch {
         // Fall through to DB poll (dev mode)
@@ -180,11 +185,10 @@ export class ConsentService {
       // Check DB (for manual resolution via portal)
       const dbRecord = await this.pollCIBA(requestId);
 
-      // Narrow: we already know it passed the "pending" gate above,
-      // so only return when it has settled into a terminal state.
+      // pollCIBA returns a Prisma record whose `status` is typed broadly.
+      // The guard below excludes "pending"; cast to the terminal union.
       if (dbRecord.status !== "pending") {
-        const terminalStatus = dbRecord.status as "approved" | "rejected" | "expired";
-        return { status: terminalStatus };
+        return { status: dbRecord.status as "approved" | "rejected" | "expired" };
       }
 
       // Back-off: increase interval slightly (max 10s)
